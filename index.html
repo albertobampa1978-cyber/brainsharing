@@ -6,6 +6,7 @@
 <title>BrainSharing — Team Intelligence Platform</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
 
 /* ── RESET ── */
@@ -773,6 +774,7 @@ header {
           <div class="page-subtitle">Smart task management · <span id="kb-total">0</span> task totali</div>
         </div>
         <div class="kb-top-actions">
+          <button class="btn-outline" onclick="downloadKanbanCSV()" title="Scarica CSV">⬇ CSV</button>
           <button class="btn-outline" onclick="openGenModal()">✨ Genera task con AI</button>
           <button class="btn-sm" onclick="openTaskModal(null)">+ Nuovo task</button>
         </div>
@@ -897,8 +899,13 @@ header {
 
     <!-- ── MEETING ASSISTANT ── -->
     <div class="page" id="page-meeting" style="display:none">
-      <div class="page-title">Meeting Assistant</div>
-      <div class="page-subtitle">Incolla gli appunti di riunione: l'AI estrae action items, deadline e priorità</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <div class="page-title">Meeting Assistant</div>
+          <div class="page-subtitle">Incolla gli appunti di riunione: l'AI estrae action items, deadline e priorità</div>
+        </div>
+        <button class="btn-outline" onclick="downloadMeetingPDF()" style="flex-shrink:0;margin-top:4px">⬇ PDF Report</button>
+      </div>
 
       <div class="mt-two">
         <div class="card">
@@ -933,6 +940,7 @@ header {
           <div class="page-subtitle">Gantt automatico · <span id="tl-count">0</span> attività</div>
         </div>
         <div style="display:flex;gap:10px">
+          <button class="btn-outline" onclick="downloadTimelinePNG()" title="Scarica immagine">⬇ PNG</button>
           <button class="btn-sm" onclick="tlGenerate()">✨ Analisi AI percorso critico</button>
         </div>
       </div>
@@ -963,8 +971,13 @@ header {
 
     <!-- ── PERSONAL HUB ── -->
     <div class="page" id="page-personal" style="display:none">
-      <div class="page-title" id="ph-title-bar">Personal Hub</div>
-      <div class="page-subtitle">Area privata — salva link e note prima di condividerle con il team</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+        <div>
+          <div class="page-title" id="ph-title-bar">Personal Hub</div>
+          <div class="page-subtitle">Area privata — salva link e note prima di condividerle con il team</div>
+        </div>
+        <button class="btn-outline" onclick="downloadPersonalPDF()" style="flex-shrink:0;margin-top:4px">⬇ PDF</button>
+      </div>
 
       <div class="two-col">
         <div class="card">
@@ -1890,6 +1903,257 @@ addMemberRow('Andrea',   '',  'Project Manager');
 addMemberRow('Antonella','',  'Designer');
 addMemberRow('Angela',   '',  'Content');
 addMemberRow('Matteo',   '',  'Developer');
+
+// ══════════════════════════════════════
+//  DOWNLOAD FUNCTIONS
+// ══════════════════════════════════════
+
+// Utility: scarica un blob come file
+function _blobDownload(content, filename, type) {
+  const blob = new Blob([content], { type });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.style.display = 'none';
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+
+// KANBAN → CSV
+function downloadKanbanCSV() {
+  if (!S.kanban.length) { alert('Nessun task nel Kanban da scaricare.'); return; }
+  const colNames = { todo:'To Do', progress:'In Progress', review:'Review', done:'Done' };
+  const headers  = ['Titolo','Assegnatario','Ruolo','Priorità','Categoria','Ore stimate','Stato'];
+  const rows = S.kanban.map(t => {
+    const member = S.members.find(m => m.nome+' '+m.cognome === t.assignee);
+    return [
+      `"${(t.title||'').replace(/"/g,'""')}"`,
+      `"${t.assignee||''}"`,
+      `"${member?.ruolo||''}"`,
+      t.pri||'', t.cat||'', t.hours||'',
+      colNames[t.col]||t.col
+    ].join(',');
+  });
+  const csv = [headers.join(','), ...rows].join('\n');
+  _blobDownload('\ufeff'+csv, `kanban_${S.project.replace(/\s+/g,'_')}.csv`, 'text/csv;charset=utf-8');
+}
+
+// TIMELINE → PNG (canvas 2D, no librerie esterne)
+function downloadTimelinePNG() {
+  const tasks = S.kanban;
+  if (!tasks.length) { alert('Aggiungi task nel Kanban prima di scaricare la timeline.'); return; }
+
+  const sv = document.getElementById('tl-start').value || new Date().toISOString().split('T')[0];
+  const ev = document.getElementById('tl-end').value;
+  const startDate  = new Date(sv);
+  const endDate    = ev ? new Date(ev) : new Date(startDate.getTime()+30*86400000);
+  const totalDays  = Math.max(7, Math.round((endDate-startDate)/86400000));
+
+  const PAD=20, LABEL=180, ROW=34, HEADER=50, TITLE=50;
+  const CHART_W=680;
+  const W = PAD + LABEL + CHART_W + PAD;
+  const H = TITLE + HEADER + tasks.length * ROW + 60;
+
+  const canvas = document.createElement('canvas');
+  canvas.width=W; canvas.height=H;
+  const ctx = canvas.getContext('2d');
+
+  // Sfondo bianco
+  ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,W,H);
+
+  // Titolo
+  ctx.fillStyle='#7B3FE4'; ctx.font='bold 15px Arial';
+  ctx.fillText(`Timeline — ${S.project}`, PAD, 24);
+  ctx.fillStyle='#9EA8C4'; ctx.font='11px Arial';
+  ctx.fillText(new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'}), PAD, 42);
+
+  // Intestazione settimane
+  const weekCount = Math.ceil(totalDays/7);
+  ctx.fillStyle='#9EA8C4'; ctx.font='10px Arial';
+  for (let i=0; i<weekCount; i++) {
+    const x = PAD + LABEL + (i*7/totalDays)*CHART_W;
+    const d = new Date(startDate); d.setDate(d.getDate()+i*7);
+    ctx.fillText(d.toLocaleDateString('it-IT',{day:'2-digit',month:'2-digit'}), x+2, TITLE+HEADER-8);
+    ctx.strokeStyle='#EBEBEB'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x, TITLE+HEADER-20); ctx.lineTo(x, H-40); ctx.stroke();
+  }
+
+  // Barre task
+  const GCOLS=['#7B3FE4','#00BCD4','#F59E0B','#EF4444','#10B981','#8B5CF6','#EC4899'];
+  const colors={}; let ci=0; let cd=0;
+  tasks.forEach((t,i) => {
+    const days = Math.max(1, Math.ceil((t.hours||4)/8));
+    const sp   = Math.min((cd/totalDays)*CHART_W, CHART_W*0.92);
+    const wp   = Math.max(8, Math.min((days/totalDays)*CHART_W, CHART_W-sp));
+    cd += days;
+    const key  = t.assignee||'Team';
+    if (!colors[key]) colors[key]=GCOLS[ci++%GCOLS.length];
+    const y  = TITLE + HEADER + i*ROW;
+
+    // Riga alternata
+    ctx.fillStyle = i%2===0?'#FAFAFA':'#FFFFFF';
+    ctx.fillRect(0,y,W,ROW);
+
+    // Etichetta
+    ctx.fillStyle = t.col==='done'?'#BBBBBB':'#1A1B3C';
+    ctx.font = '11px Arial';
+    const lbl = t.title.length>24?t.title.slice(0,24)+'…':t.title;
+    ctx.fillText(lbl, PAD, y+ROW/2+4);
+
+    // Barra
+    const bx=PAD+LABEL+sp, by=y+5, bh=ROW-10, r=4;
+    ctx.globalAlpha = t.col==='done'?0.35:1;
+    ctx.fillStyle = colors[key];
+    ctx.beginPath();
+    ctx.moveTo(bx+r,by); ctx.lineTo(bx+wp-r,by);
+    ctx.quadraticCurveTo(bx+wp,by,bx+wp,by+r);
+    ctx.lineTo(bx+wp,by+bh-r);
+    ctx.quadraticCurveTo(bx+wp,by+bh,bx+wp-r,by+bh);
+    ctx.lineTo(bx+r,by+bh); ctx.quadraticCurveTo(bx,by+bh,bx,by+bh-r);
+    ctx.lineTo(bx,by+r); ctx.quadraticCurveTo(bx,by,bx+r,by); ctx.closePath();
+    ctx.fill(); ctx.globalAlpha=1;
+
+    if (wp>40) {
+      ctx.fillStyle='#fff'; ctx.font='bold 9px Arial';
+      const ini=(t.assignee||'').split(' ').map(w=>w[0]).join('').slice(0,2);
+      ctx.fillText(`${ini} · ${days}g`, bx+6, by+bh/2+3);
+    }
+  });
+
+  // Legenda
+  const ly = TITLE+HEADER+tasks.length*ROW+18;
+  ctx.fillStyle='#9EA8C4'; ctx.font='10px Arial'; ctx.fillText('LEGENDA', PAD, ly);
+  let lx=PAD+56;
+  Object.entries(colors).forEach(([name,col])=>{
+    ctx.fillStyle=col; ctx.fillRect(lx,ly-9,10,10);
+    ctx.fillStyle='#5A6280'; ctx.font='10px Arial';
+    ctx.fillText(name, lx+14, ly);
+    lx += name.length*6+30;
+  });
+
+  _blobDownload(
+    // toDataURL → Blob
+    (() => {
+      const d = canvas.toDataURL('image/png').split(',')[1];
+      const b = atob(d); const arr = new Uint8Array(b.length);
+      for(let i=0;i<b.length;i++) arr[i]=b.charCodeAt(i);
+      return arr;
+    })(),
+    `timeline_${S.project.replace(/\s+/g,'_')}.png`,
+    'image/png'
+  );
+}
+
+// Utility PDF: iframe nascosto → dialogo di stampa → Salva come PDF
+function _printPDF(html) {
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;';
+  document.body.appendChild(iframe);
+  const d = iframe.contentDocument || iframe.contentWindow.document;
+  d.open(); d.write(html); d.close();
+  setTimeout(() => {
+    iframe.contentWindow.focus();
+    iframe.contentWindow.print();
+    setTimeout(() => { if (iframe.parentNode) iframe.parentNode.removeChild(iframe); }, 4000);
+  }, 700);
+}
+
+// MEETING ASSISTANT → PDF
+function downloadMeetingPDF() {
+  if (!window._mtData) { alert('Estrai prima i dati dalla riunione con AI.'); return; }
+  const data   = window._mtData;
+  const mtitle = document.getElementById('mt-title')?.value || 'Riunione';
+  const priColor = data.priority==='Alta'?'#EF4444':data.priority==='Media'?'#F59E0B':'#7B3FE4';
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Meeting Report — ${mtitle}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1A1B3C; background: #fff; }
+  .page { max-width: 700px; margin: 0 auto; padding: 40px 48px; }
+  .top-bar { background: #7B3FE4; height: 8px; margin: -40px -48px 28px; }
+  h1 { color: #7B3FE4; font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #9EA8C4; font-size: 12px; margin-bottom: 20px; }
+  .divider { border: none; border-top: 2px solid #7B3FE4; margin-bottom: 22px; }
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #9EA8C4; font-weight: 700; margin-bottom: 12px; }
+  .action-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid #F0EFFE; }
+  .av { width: 34px; height: 34px; border-radius: 50%; background: #F0EFFE; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #7B3FE4; font-size: 11px; flex-shrink: 0; }
+  .ai-name { font-weight: 700; font-size: 13px; color: #1A1B3C; margin-bottom: 3px; }
+  .ai-action { font-size: 12px; color: #5A6280; line-height: 1.4; }
+  .stats { display: flex; gap: 16px; margin: 22px 0; }
+  .stat-box { flex: 1; background: #F6F4FF; border-radius: 10px; padding: 14px 18px; }
+  .stat-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: #9EA8C4; font-weight: 700; }
+  .stat-val { font-size: 22px; font-weight: 700; margin-top: 5px; }
+  .decision { padding: 8px 0 8px 12px; border-left: 3px solid #00BCD4; margin-bottom: 8px; font-size: 13px; color: #1A1B3C; line-height: 1.4; }
+  @media print { @page { margin: 0; size: A4; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head>
+<body><div class="page">
+  <div class="top-bar"></div>
+  <h1>Meeting Report</h1>
+  <div class="sub">${mtitle} &nbsp;·&nbsp; Progetto: <strong>${S.project}</strong> &nbsp;·&nbsp; ${new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'})}</div>
+  <hr class="divider">
+  <div class="section-label">Action Items — ${(data.items||[]).length} estratti</div>
+  ${(data.items||[]).map(item=>`
+    <div class="action-item">
+      <div class="av">${(item.assignee||'?').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase()}</div>
+      <div><div class="ai-name">${item.assignee||''}</div><div class="ai-action">${item.action||''}</div></div>
+    </div>`).join('')}
+  <div class="stats">
+    <div class="stat-box"><div class="stat-label">Deadline</div><div class="stat-val" style="color:#F59E0B">${data.deadline||'Da definire'}</div></div>
+    <div class="stat-box"><div class="stat-label">Priorità</div><div class="stat-val" style="color:${priColor}">${data.priority||'Media'}</div></div>
+  </div>
+  ${(data.decisions||[]).length?`<div class="section-label" style="margin-top:8px">Decisioni prese</div>${data.decisions.map(d=>`<div class="decision">${d}</div>`).join('')}`:''}
+</div></body></html>`;
+
+  _printPDF(html);
+}
+
+// PERSONAL HUB → PDF
+function downloadPersonalPDF() {
+  if (!S.personal.length) { alert('Nessun elemento salvato nel Personal Hub.'); return; }
+  const nLinks = S.personal.filter(i=>i.type==='link').length;
+  const nNotes = S.personal.filter(i=>i.type==='note').length;
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Personal Hub — ${S.user?.nome||''} ${S.user?.cognome||''}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #1A1B3C; background: #fff; }
+  .page { max-width: 700px; margin: 0 auto; padding: 40px 48px; }
+  .top-bar { background: #7B3FE4; height: 8px; margin: -40px -48px 28px; }
+  h1 { color: #7B3FE4; font-size: 22px; margin-bottom: 4px; }
+  .sub { color: #9EA8C4; font-size: 12px; margin-bottom: 20px; }
+  .divider { border: none; border-top: 2px solid #7B3FE4; margin-bottom: 22px; }
+  .section-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: #9EA8C4; font-weight: 700; margin-bottom: 16px; }
+  .item { padding: 16px 0; border-bottom: 1px solid #F0EFFE; }
+  .badge { display: inline-block; background: #F0EFFE; color: #7B3FE4; font-size: 9px; font-weight: 700; padding: 2px 10px; border-radius: 10px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 7px; }
+  .item-title { font-weight: 700; font-size: 14px; color: #1A1B3C; margin-bottom: 4px; }
+  .item-url { font-size: 11px; color: #00BCD4; word-break: break-all; margin-bottom: 5px; }
+  .item-note { font-size: 12px; color: #5A6280; line-height: 1.5; margin-bottom: 5px; }
+  .item-date { font-size: 10px; color: #9EA8C4; }
+  @media print { @page { margin: 0; size: A4; } body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+</style></head>
+<body><div class="page">
+  <div class="top-bar"></div>
+  <h1>Personal Hub</h1>
+  <div class="sub">${(S.user?.nome||'')+' '+(S.user?.cognome||'')} &nbsp;·&nbsp; Progetto: <strong>${S.project}</strong> &nbsp;·&nbsp; ${new Date().toLocaleDateString('it-IT',{day:'2-digit',month:'long',year:'numeric'})}</div>
+  <hr class="divider">
+  <div class="section-label">${nLinks} link &nbsp;·&nbsp; ${nNotes} note</div>
+  ${S.personal.map(item=>`
+    <div class="item">
+      <div class="badge">${item.type==='link'?'Link':'Nota'}</div>
+      <div class="item-title">${item.title||''}</div>
+      ${item.url?`<div class="item-url">${item.url}</div>`:''}
+      ${item.note?`<div class="item-note">${item.note}</div>`:''}
+      <div class="item-date">${item.date||''}</div>
+    </div>`).join('')}
+</div></body></html>`;
+
+  _printPDF(html);
+}
 
 </script>
 </body>
