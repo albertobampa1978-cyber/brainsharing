@@ -933,7 +933,6 @@ header {
           <div class="page-subtitle">Gantt automatico · <span id="tl-count">0</span> attività</div>
         </div>
         <div style="display:flex;gap:10px">
-          <button class="btn-outline" onclick="importKanbanToTl()">↑ Importa dal Kanban</button>
           <button class="btn-sm" onclick="tlGenerate()">✨ Analisi AI percorso critico</button>
         </div>
       </div>
@@ -1099,12 +1098,6 @@ function startApp() {
   S.project = project;
   S.members = members;
   S.user    = members[parseInt(uidx)];
-  S.tasks   = {
-    active:    members.length * 3,
-    late:      Math.max(1, Math.floor(members.length * 0.8)),
-    deadlines: Math.ceil(members.length * 0.5),
-    done:      Math.floor(members.length * 1.5)
-  };
 
   buildApp();
   document.getElementById('login-screen').style.display = 'none';
@@ -1126,26 +1119,49 @@ function buildApp() {
   document.getElementById('dash-title').textContent   = 'Ciao, ' + u.nome + ' 👋';
   document.getElementById('dash-sub').textContent     = 'Panoramica · ' + S.project;
 
-  document.getElementById('w-active').textContent = S.tasks.active;
-  document.getElementById('w-late').textContent   = S.tasks.late;
-  document.getElementById('w-dead').textContent   = S.tasks.deadlines;
-
-  const total = S.tasks.active + S.tasks.done;
-  const pct   = total > 0 ? Math.round((S.tasks.done / total) * 100) : 0;
-  document.getElementById('w-pct').textContent = pct + '%';
-
+  updateDashboardWidgets();
   buildWorkload();
   initTimeline();
 }
 
-const COLORS = ['#1D9E75','#7F77DD','#378ADD','#EF9F27','#E24B4A','#5DCAA5','#ED93B1','#EF9F27'];
+// Aggiorna i widget SOLO con dati reali dal Kanban
+function updateDashboardWidgets() {
+  const active    = S.kanban.filter(t => t.col !== 'done').length;
+  const done      = S.kanban.filter(t => t.col === 'done').length;
+  const late      = S.kanban.filter(t => t.col !== 'done' && t.pri === 'Alta').length;
+  const deadlines = S.kanban.filter(t => t.col !== 'done' && t.pri !== 'Bassa').length;
+  const total     = active + done;
+  const pct       = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  const ae = document.getElementById('w-active'); if(ae) ae.textContent = active || '—';
+  const le = document.getElementById('w-late');   if(le) le.textContent = late   || '—';
+  const de = document.getElementById('w-dead');   if(de) de.textContent = deadlines || '—';
+  const pe = document.getElementById('w-pct');    if(pe) pe.textContent = total > 0 ? pct + '%' : '—';
+}
+
+const COLORS = ['#7B3FE4','#00BCD4','#F59E0B','#EF4444','#10B981','#8B5CF6','#EC4899'];
 
 function buildWorkload() {
   const list = document.getElementById('workload-list');
+  if (!list) return;
+
+  const memberCounts = S.members.map(m => {
+    const fullName = m.nome + ' ' + m.cognome;
+    const count = S.kanban.filter(t => t.assignee === fullName && t.col !== 'done').length;
+    return { ...m, count };
+  });
+
+  const maxCount = Math.max(...memberCounts.map(m => m.count), 1);
+  const hasAny   = memberCounts.some(m => m.count > 0);
+
+  if (!hasAny) {
+    list.innerHTML = '<div style="color:var(--text-3);font-size:12px;text-align:center;padding:20px 0">Nessun task assegnato ancora.<br>Crea task nel Kanban per vedere il carico del team.</div>';
+    return;
+  }
+
   list.innerHTML = '';
-  S.members.forEach((m, i) => {
-    const tasks = Math.floor(Math.random() * 9) + 1;
-    const pct   = Math.round((tasks / 12) * 100);
+  memberCounts.forEach((m, i) => {
+    const pct   = Math.round((m.count / maxCount) * 100);
     const color = COLORS[i % COLORS.length];
     const row   = document.createElement('div');
     row.className = 'workload-row';
@@ -1153,7 +1169,7 @@ function buildWorkload() {
       <div class="w-name">${m.nome} ${m.cognome[0] ? m.cognome[0]+'.' : ''}</div>
       <div class="w-role">${m.ruolo}</div>
       <div class="bar-wrap"><div class="bar-fill" style="width:0%;background:${color}" data-pct="${pct}"></div></div>
-      <div class="w-count">${tasks} task</div>
+      <div class="w-count">${m.count} task</div>
     `;
     list.appendChild(row);
   });
@@ -1442,7 +1458,7 @@ function renderTimeline() {
   if (!chart) return;
   document.getElementById('tl-count').textContent = allTasks.length;
   if (!allTasks.length) {
-    chart.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:36px;margin-bottom:10px;opacity:0.2">≡</div><div style="font-size:13px;margin-bottom:16px">Nessuna attività. Aggiungi task nel Kanban (con stima ore) poi importali.</div><button class="btn-primary" onclick="showPage('kanban',null)" style="width:auto;padding:10px 20px">→ Vai al Kanban</button></div>`;
+    chart.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-3)"><div style="font-size:36px;margin-bottom:10px;opacity:0.2">≡</div><div style="font-size:13px">Aggiungi task nel Kanban con una stima delle ore per visualizzare il Gantt.</div></div>`;
     return;
   }
   const sv = document.getElementById('tl-start').value || new Date().toISOString().split('T')[0];
@@ -1609,12 +1625,8 @@ function renderKanban() {
   });
   const tot = document.getElementById('kb-total');
   if (tot) tot.textContent = S.kanban.length;
-  // sync dashboard widgets
-  const active = S.kanban.filter(t => t.col !== 'done').length;
-  const done   = S.kanban.filter(t => t.col === 'done').length;
-  const pct    = (active + done) > 0 ? Math.round(done / (active + done) * 100) : 0;
-  const ae = document.getElementById('w-active'); if (ae) ae.textContent = active;
-  const pe = document.getElementById('w-pct');    if (pe) pe.textContent = pct + '%';
+  updateDashboardWidgets();
+  buildWorkload();
 }
 
 function cardHTML(t) {
@@ -1752,8 +1764,10 @@ function mockSuggest(title) {
 
 // ── AI GENERATOR ──
 function openGenModal() {
+  const goalEl = document.getElementById('gen-goal');
+  if (goalEl && !goalEl.value.trim()) goalEl.value = S.project || '';
   document.getElementById('modal-gen').style.display = 'flex';
-  setTimeout(()=>document.getElementById('gen-goal').focus(), 60);
+  setTimeout(()=>goalEl.focus(), 60);
 }
 
 async function runGen() {
